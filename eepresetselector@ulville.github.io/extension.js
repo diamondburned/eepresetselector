@@ -30,16 +30,25 @@ import Meta from 'gi://Meta';
 
 import {Extension, gettext as _} from 'resource:///org/gnome/shell/extensions/extension.js';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
-import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
 import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
+import * as QuickSettings from 'resource:///org/gnome/shell/ui/quickSettings.js';
 
 let sourceId = null;
 
-const EEPSIndicator = GObject.registerClass(
-    class EEPSIndicator extends PanelMenu.Button {
+const EEPSIndicatorToggle = GObject.registerClass(
+    class EEPSIndicatorToggle extends QuickSettings.QuickMenuToggle {
         _init(settings, path) {
-            super._init(0.5, _('EasyEffects Preset Selector'));
+            const gicon = Gio.icon_new_for_string(
+                `${path}/icons/eepresetselector-symbolic.svg`
+            );
+            super._init({
+                title: _('EasyEffects'),
+                subtitle: null,
+                gicon,
+                toggleMode: true,
+            });
 
+            this.gicon = gicon;
             this.categoryNames = [' ', ' '];
             this.outputPresets = [' '];
             this.inputPresets = [' '];
@@ -71,26 +80,29 @@ const EEPSIndicator = GObject.registerClass(
                 Shell.ActionMode.NORMAL | Shell.ActionMode.OVERVIEW | Shell.ActionMode.POPUP,
                 () => this._toggleGlobalBypass());
 
-            this._icon = new St.Icon({style_class: 'system-status-icon'});
-            this._icon.gicon = Gio.icon_new_for_string(
-                `${path}/icons/eepresetselector-symbolic.svg`
-            );
-            this.add_child(this._icon);
-            this.connect('button-press-event', () => {
+            this.connect('clicked', () => {
+                this._enableGlobalBypass(!this.enableBypass);
                 this._refreshMenu();
             });
+
+            this._syncHeaderAndState();
             this._refreshMenu();
+        }
+
+        _syncHeaderAndState() {
+            const subtitle = this.lastUsedOutputPreset?.trim() || null;
+            this.subtitle = subtitle;
+            this.checked = !this.enableBypass;
+            this.menu.setHeader(this.gicon, _('EasyEffects'), subtitle || '');
         }
 
         async _toggleGlobalBypass() {
             await this._refreshMenu();
             this._enableGlobalBypass(!this.enableBypass);
             await this._refreshMenu();
-            if (!this.menu.isOpen)
-                this.menu.toggle();
         }
 
-        _loadNext(presetType) {
+        async _loadNext(presetType) {
             let nextPreset;
             if (presetType === 'output') {
                 const index = this.outputPresets.indexOf(this.lastUsedOutputPreset);
@@ -102,11 +114,10 @@ const EEPSIndicator = GObject.registerClass(
                 nextPreset = this.inputPresets[nextIndex];
             }
 
-            if (!(nextPreset === undefined))
+            if (nextPreset !== undefined)
                 this._loadPreset(nextPreset, this.command);
 
-            if (!this.menu.isOpen)
-                this.menu.toggle();
+            await this._refreshMenu();
         }
 
         _loadPreset(preset, commandArr) {
@@ -122,7 +133,10 @@ const EEPSIndicator = GObject.registerClass(
 
                 if (this.inputPresets.includes(preset))
                     this.lastUsedInputPreset = preset;
+
+                this._syncHeaderAndState();
                 this._buildMenu(this.categoryNames[0], this.categoryNames[1], commandArr);
+                this._refreshMenu();
             } catch (error) {
                 Main.notify(
                     _('An error occurred while trying to load the preset'),
@@ -134,6 +148,7 @@ const EEPSIndicator = GObject.registerClass(
 
         _enableGlobalBypass(state) {
             this.enableBypass = state;
+            this.checked = !state;
             const bypassOption = state ? '1' : '2';
             const command = this.command.concat(['-b', bypassOption]).join(' ');
             try {
@@ -182,7 +197,7 @@ const EEPSIndicator = GObject.registerClass(
 
                 _menuItem.connect('activate', () => {
                     this._loadPreset(element, command);
-                    this.menu.toggle();
+                    this.menu.close();
                 });
                 menuSection.addMenuItem(_menuItem);
             });
@@ -191,6 +206,8 @@ const EEPSIndicator = GObject.registerClass(
         }
 
         _buildMenu(outputCategoryName, inputCategoryName, command) {
+            this._syncHeaderAndState();
+
             // Clear Menu
             this.menu._getMenuItems().forEach(item => {
                 item.destroy();
@@ -218,15 +235,6 @@ const EEPSIndicator = GObject.registerClass(
             let _separatorItem = new PopupMenu.PopupSeparatorMenuItem();
             this.menu.addMenuItem(_separatorItem);
 
-            // Add switch menu item to toggle global bypass
-            const toggleBypassItem = new PopupMenu.PopupSwitchMenuItem(_('Global Bypass'), this.enableBypass, {});
-            toggleBypassItem.setOrnament(PopupMenu.Ornament.NONE);
-            toggleBypassItem.add_style_class_name('bypass-toggle-item');
-            toggleBypassItem.connect('toggled', (item, state) => {
-                this._enableGlobalBypass(state);
-            });
-            this.menu.addMenuItem(toggleBypassItem);
-
             // Add a menu item to activate (open) the Easy Effects application
             let _easyEffectsActivatorItem = new PopupMenu.PopupMenuItem(
                 _('Launch %s').format(this.easyEffectsApp.get_name())
@@ -235,6 +243,7 @@ const EEPSIndicator = GObject.registerClass(
             _easyEffectsActivatorItem.add_style_class_name('easyeffects-activator-item');
             _easyEffectsActivatorItem.connect('activate', () => {
                 Main.overview.hide();
+                Main.panel.closeQuickSettings();
                 this.easyEffectsApp.activate();
             });
             this.menu.addMenuItem(_easyEffectsActivatorItem);
@@ -242,22 +251,23 @@ const EEPSIndicator = GObject.registerClass(
             // Arrange scrollbar policies
             let _menuThemeNode = this.menu.actor.get_theme_node();
             let _maxHeight = _menuThemeNode.get_max_height();
-            let [, _titleNaturH] = this.menu.firstMenuItem.actor.get_preferred_height(-1);
+            let [, _titleNaturH] = this.menu.firstMenuItem
+                ? this.menu.firstMenuItem.actor.get_preferred_height(-1)
+                : [0, 0];
             let [, _outputNaturH] = _outputSection.actor.get_preferred_height(-1);
             let [, _inputNaturH] = _inputSection.actor.get_preferred_height(-1);
             let [, _sepNaturH] = _separatorItem.actor.get_preferred_height(-1);
-            let [, _toggleBypassNaturH] = toggleBypassItem.actor.get_preferred_height(-1);
             let [, _eeActNaturH] = _easyEffectsActivatorItem.actor.get_preferred_height(-1);
 
-            let _notFillsScreen = _maxHeight >= 0 && _inputNaturH + _outputNaturH + 2 * _titleNaturH <= _maxHeight - _eeActNaturH - _sepNaturH - _toggleBypassNaturH;
+            let _notFillsScreen = _maxHeight >= 0 && _inputNaturH + _outputNaturH + 2 * _titleNaturH <= _maxHeight - _eeActNaturH - _sepNaturH;
             if (_notFillsScreen) {
                 _inputScrollView.vscrollbar_policy = St.PolicyType.NEVER;
                 _outputScrollView.vscrollbar_policy = St.PolicyType.NEVER;
             } else {
-                let _outputNeedsScrollbar = _maxHeight >= 0 && _outputNaturH + _titleNaturH >= (_maxHeight - _eeActNaturH - _sepNaturH - _toggleBypassNaturH) / 2;
+                let _outputNeedsScrollbar = _maxHeight >= 0 && _outputNaturH + _titleNaturH >= (_maxHeight - _eeActNaturH - _sepNaturH) / 2;
                 _outputScrollView.vscrollbar_policy = _outputNeedsScrollbar ? St.PolicyType.AUTOMATIC : St.PolicyType.NEVER;
 
-                let _inputNeedsScrollbar = _maxHeight >= 0 && _inputNaturH + _titleNaturH >= (_maxHeight - _eeActNaturH - _sepNaturH - _toggleBypassNaturH) / 2;
+                let _inputNeedsScrollbar = _maxHeight >= 0 && _inputNaturH + _titleNaturH >= (_maxHeight - _eeActNaturH - _sepNaturH) / 2;
                 _inputScrollView.vscrollbar_policy = _inputNeedsScrollbar ? St.PolicyType.AUTOMATIC : St.PolicyType.NEVER;
             }
         }
@@ -271,6 +281,9 @@ const EEPSIndicator = GObject.registerClass(
                 this.menu._getMenuItems().forEach(item => {
                     item.destroy();
                 });
+                this.subtitle = null;
+                this.checked = false;
+                this.menu.setHeader(this.gicon, _('EasyEffects'), '');
                 Main.notify(
                     _("EasyEffects isn't available on the system"),
                     _('This extension depends on EasyEffects to function')
@@ -313,6 +326,7 @@ const EEPSIndicator = GObject.registerClass(
                 try {
                     const bypassResponse = await this.execCommunicate(this.command.concat(['-b', '3']));
                     this.enableBypass = bypassResponse.trim() === '1';
+                    this.checked = !this.enableBypass;
                 } catch (err) {
                     Main.notify(_('An error occurred while trying to get global bypass'), _(`Error:\n\n${err}`));
                     logError(err);
@@ -360,6 +374,7 @@ const EEPSIndicator = GObject.registerClass(
                     }
                     this.lastUsedOutputPreset = lastPresets[0];
                     this.lastUsedInputPreset = lastPresets[1];
+                    this._syncHeaderAndState();
 
                     this.categoryNames = [];
                     this.outputPresets = [];
@@ -620,11 +635,37 @@ const EEPSIndicator = GObject.registerClass(
     }
 );
 
+const EEPSIndicator = GObject.registerClass(
+    class EEPSIndicator extends QuickSettings.SystemIndicator {
+        _init(toggle) {
+            super._init();
+            this.quickSettingsItems.push(toggle);
+        }
+    }
+);
+
 export default class EEPSExtension extends Extension {
     enable() {
         this._settings = this.getSettings();
-        this._indicator = new EEPSIndicator(this._settings, this.path);
-        Main.panel.addToStatusArea(this.uuid, this._indicator);
+        this._toggle = new EEPSIndicatorToggle(this._settings, this.path);
+        this._indicator = new EEPSIndicator(this._toggle);
+
+        Main.panel.statusArea.quickSettings.addExternalIndicator(this._indicator);
+
+        this._qsMenuOpenedId = Main.panel.statusArea.quickSettings.menu.connect(
+            'open-state-changed',
+            (menu, isOpen) => {
+                if (isOpen)
+                    this._toggle._refreshMenu();
+            }
+        );
+
+        this._toggle.connect('destroy', () => {
+            if (this._qsMenuOpenedId) {
+                Main.panel.statusArea.quickSettings.menu.disconnect(this._qsMenuOpenedId);
+                this._qsMenuOpenedId = null;
+            }
+        });
     }
 
     disable() {
@@ -635,8 +676,16 @@ export default class EEPSExtension extends Extension {
         Main.wm.removeKeybinding('cycle-output-presets');
         Main.wm.removeKeybinding('cycle-input-presets');
         Main.wm.removeKeybinding('toggle-global-bypass');
+
+        if (this._qsMenuOpenedId) {
+            Main.panel.statusArea.quickSettings.menu.disconnect(this._qsMenuOpenedId);
+            this._qsMenuOpenedId = null;
+        }
+
+        this._indicator.quickSettingsItems.forEach(item => item.destroy());
         this._indicator.destroy();
         this._indicator = null;
+        this._toggle = null;
         this._settings = null;
     }
 }

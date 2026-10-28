@@ -1,6 +1,6 @@
 {
   "name": "EasyEffects Preset Selector",
-  "description": "Quickly show and load EasyEffects Presets",
+  "description": "Quickly show and load EasyEffects Presets from Quick Settings",
   "uuid": "eepresetselector@ulville.github.io",
   "shell-version": [
     "45",
