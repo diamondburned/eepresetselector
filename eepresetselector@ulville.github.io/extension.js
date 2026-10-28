@@ -80,10 +80,7 @@ const EEPSIndicatorToggle = GObject.registerClass(
                 Shell.ActionMode.NORMAL | Shell.ActionMode.OVERVIEW | Shell.ActionMode.POPUP,
                 () => this._toggleGlobalBypass());
 
-            this.connect('clicked', () => {
-                this._enableGlobalBypass(!this.enableBypass);
-                this._refreshMenu();
-            });
+            this.connect('clicked', () => this._enableGlobalBypass(!this.enableBypass));
 
             this._syncHeaderAndState();
             this._refreshMenu();
@@ -659,13 +656,6 @@ export default class EEPSExtension extends Extension {
                     this._toggle._refreshMenu();
             }
         );
-
-        this._toggle.connect('destroy', () => {
-            if (this._qsMenuOpenedId) {
-                Main.panel.statusArea.quickSettings.menu.disconnect(this._qsMenuOpenedId);
-                this._qsMenuOpenedId = null;
-            }
-        });
     }
 
     disable() {
